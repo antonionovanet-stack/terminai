@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+mt5 = ["MetaTrader5>=5.0.45; platform_system == 'Windows'"]
 
 [project.scripts]
 forex-trader = "forex_trader.cli:main"

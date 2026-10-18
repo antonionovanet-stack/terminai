@@ -8,6 +8,7 @@ def test_load_example_config():
     assert cfg.risk.risk_per_trade == 0.01
     assert cfg.claude.model == "claude-opus-5-5"
     assert "EUR_USD" in cfg.instruments
+    assert cfg.broker == "mt5" and cfg.mt5.magic == 20261018
 
 
 def test_unknown_key_rejected(tmp_path):

@@ -24,7 +24,18 @@ class ReasonerConfig:
 
 
 @dataclass
+class MT5Config:
+    symbol_suffix: str = ""  # es. ".m" se il broker chiama i simboli EURUSD.m
+    symbol_map: dict[str, str] = field(default_factory=dict)  # es. {"EUR_USD" = "EURUSDpro"}
+    magic: int = 20261018
+    deviation_points: int = 20
+    server_utc_offset_hours: float = 0.0
+    path: str | None = None  # percorso di terminal64.exe, se serve
+
+
+@dataclass
 class AppConfig:
+    broker: str = "mt5"  # mt5 | oanda
     instruments: list[str] = field(default_factory=lambda: ["EUR_USD", "GBP_USD", "USD_JPY"])
     poll_seconds: int = 60
     journal_path: str = "journal/decisions.jsonl"
@@ -33,6 +44,7 @@ class AppConfig:
     claude: ClaudeSettings = field(default_factory=ClaudeSettings)
     reasoner: ReasonerConfig = field(default_factory=ReasonerConfig)
     engine: EngineConfig = field(default_factory=EngineConfig)
+    mt5: MT5Config = field(default_factory=MT5Config)
 
 
 def _build(cls: type[T], values: dict[str, Any]) -> T:
@@ -49,7 +61,7 @@ def load_config(path: str | Path | None) -> AppConfig:
     raw = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     sections = {
         "risk": RiskConfig, "rules": RuleParams, "claude": ClaudeSettings,
-        "reasoner": ReasonerConfig, "engine": EngineConfig,
+        "reasoner": ReasonerConfig, "engine": EngineConfig, "mt5": MT5Config,
     }
     kwargs: dict[str, Any] = {k: _build(cls, raw.pop(k)) for k, cls in sections.items() if k in raw}
     general = raw.pop("general", {})

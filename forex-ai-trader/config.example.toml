@@ -1,6 +1,7 @@
 # Copia in config.toml e adatta. Ogni sezione/chiave è opzionale.
 
 [general]
+broker = "mt5"             # mt5 | oanda
 instruments = ["EUR_USD", "GBP_USD", "USD_JPY"]
 poll_seconds = 60
 journal_path = "journal/decisions.jsonl"
@@ -34,3 +35,14 @@ min_score = 3.5
 history_bars = 500
 break_even_at_r = 1.0      # sposta lo stop a pareggio quando il profitto raggiunge 1R
 dry_run = false
+
+[mt5]
+symbol_suffix = ""         # suffisso dei simboli del tuo broker, es. ".m" per EURUSD.m (vedi "Market Watch")
+magic = 20261018           # il bot gestisce solo le posizioni con questo magic number
+deviation_points = 20      # slippage massimo accettato, in punti
+server_utc_offset_hours = 0  # molti broker usano UTC+2/+3: imposta l'offset per allineare le candele H4
+# path = 'C:\Program Files\MetaTrader 5\terminal64.exe'
+
+# Se i nomi non seguono lo schema BASEQUOTE+suffisso:
+# [mt5.symbol_map]
+# EUR_USD = "EURUSDpro"

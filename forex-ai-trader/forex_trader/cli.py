@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 
 from .analysis import analyze
 from .backtest import run_backtest
+from .brokers.mt5 import MT5Error
+from .brokers.oanda import OandaError
 from .config import AppConfig, load_config
 from .data import load_csv, synthetic_candles
 from .engine import TradingEngine
@@ -71,10 +73,18 @@ def cmd_backtest(args: argparse.Namespace, cfg: AppConfig) -> int:
     return 0
 
 
-def _live_broker(args: argparse.Namespace):
-    from .brokers.oanda import OandaBroker
+def _live_broker(args: argparse.Namespace, cfg: AppConfig):
+    kind = args.broker or cfg.broker
+    if kind == "mt5":
+        from .brokers.mt5 import MT5Broker
 
-    return OandaBroker.from_env(live=args.live)
+        opts = asdict(cfg.mt5)
+        return MT5Broker.from_env(live=args.live, **opts)
+    if kind == "oanda":
+        from .brokers.oanda import OandaBroker
+
+        return OandaBroker.from_env(live=args.live)
+    raise SystemExit(f"Broker sconosciuto: {kind}")
 
 
 def cmd_analyze(args: argparse.Namespace, cfg: AppConfig) -> int:
@@ -84,7 +94,7 @@ def cmd_analyze(args: argparse.Namespace, cfg: AppConfig) -> int:
 
         account = Account(10_000.0, 10_000.0, "USD")
     else:
-        broker = _live_broker(args)
+        broker = _live_broker(args, cfg)
         candles = broker.get_candles(args.instrument, cfg.engine.history_bars)
         account = broker.get_account()
     snapshot = analyze(candles, args.instrument)
@@ -114,7 +124,7 @@ def cmd_analyze(args: argparse.Namespace, cfg: AppConfig) -> int:
 
 def cmd_run(args: argparse.Namespace, cfg: AppConfig) -> int:
     print(RISK_BANNER, file=sys.stderr)
-    broker = _live_broker(args)
+    broker = _live_broker(args, cfg)
     engine_cfg = replace(cfg.engine, dry_run=args.dry_run)
     instruments = args.instruments or cfg.instruments
     engine = TradingEngine(
@@ -161,12 +171,14 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("analyze", help="analizza ora uno strumento e mostra il ragionamento")
     a.add_argument("--instrument", default="EUR_USD")
     a.add_argument("--reasoner", choices=reasoner_choices, default="hybrid")
-    a.add_argument("--synthetic", action="store_true", help="usa dati sintetici invece di OANDA")
+    a.add_argument("--broker", choices=["mt5", "oanda"], help="broker da cui leggere i dati (default da config: mt5)")
+    a.add_argument("--synthetic", action="store_true", help="usa dati sintetici invece del broker")
     a.add_argument("--seed", type=int, default=7)
-    a.add_argument("--live", action="store_true", help="usa il conto reale OANDA (richiede FOREX_ALLOW_LIVE=yes)")
+    a.add_argument("--live", action="store_true", help="consente un conto reale (richiede FOREX_ALLOW_LIVE=yes)")
     a.add_argument("--json", action="store_true")
 
-    r = sub.add_parser("run", help="trading continuo su OANDA (demo di default)")
+    r = sub.add_parser("run", help="trading continuo su MetaTrader 5 o OANDA (conto demo di default)")
+    r.add_argument("--broker", choices=["mt5", "oanda"], help="default da config: mt5")
     r.add_argument("--instruments", nargs="*")
     r.add_argument("--reasoner", choices=reasoner_choices)
     r.add_argument("--dry-run", action="store_true", help="ragiona e registra, senza inviare ordini")
@@ -183,7 +195,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     cfg = load_config(args.config)
     handlers = {"backtest": cmd_backtest, "analyze": cmd_analyze, "run": cmd_run}
-    return handlers[args.command](args, cfg)
+    try:
+        return handlers[args.command](args, cfg)
+    except (MT5Error, OandaError) as exc:
+        print(f"Errore broker: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

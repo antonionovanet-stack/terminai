@@ -17,10 +17,12 @@ Unisce tre livelli:
 > risultati su dati sintetici non dicono nulla sul mercato reale. Fai backtest su dati storici veri,
 > poi usa a lungo il conto **demo**, e solo dopo valuta con prudenza il denaro reale.
 
+Broker supportati: **MetaTrader 5** (predefinito), **OANDA** e un simulatore per i backtest.
+
 ## Architettura
 
 ```
- Broker (OANDA / simulatore)
+ Broker (MetaTrader 5 / OANDA / simulatore)
         │ candele H1, prezzi, conto
         ▼
  analysis.py ──► MarketSnapshot (H1 + H4 ricampionato, regime, livelli)
@@ -76,20 +78,55 @@ lo annota nel diario (`source: "rules(fallback: ...)"`).
 
 Serve Python 3.11 o successivo.
 
-```bash
+### Con MetaTrader 5 (Windows)
+
+Il pacchetto ufficiale `MetaTrader5` dialoga con il terminale MT5 aperto **sullo stesso PC Windows**,
+quindi il programma va eseguito lì (non su un server Linux o su un Mac).
+
+1. Installa e apri MetaTrader 5 ed entra nel tuo conto, **demo** per iniziare
+   (File → Apri un conto → conto demo).
+2. Attiva il pulsante **Algo Trading** nella barra degli strumenti (deve diventare verde) e, in
+   Strumenti → Opzioni → Expert Advisor, consenti il trading algoritmico.
+3. In "Market Watch" controlla come il tuo broker chiama le coppie: se sono `EURUSD.m` o `EURUSDm`,
+   imposta `symbol_suffix` nella sezione `[mt5]` della configurazione.
+4. Installa il programma in PowerShell:
+
+```powershell
+git clone https://github.com/<tuo-utente>/forex-ai-trader.git
 cd forex-ai-trader
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp config.example.toml config.toml   # poi adatta i parametri
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev,mt5]"
+copy config.example.toml config.toml   # poi adatta i parametri
 ```
 
-Credenziali, tramite variabili d'ambiente:
+5. Credenziali:
+
+```powershell
+$env:ANTHROPIC_API_KEY = "..."     # per i ragionatori claude/hybrid
+# Facoltative: se il terminale è già collegato al conto, non servono.
+$env:MT5_LOGIN = "12345678"
+$env:MT5_PASSWORD = "..."
+$env:MT5_SERVER = "NomeBroker-Demo"
+```
+
+Il bot gestisce **solo le posizioni aperte da lui** (riconosciute dal `magic` number), così i trade
+manuali sullo stesso conto restano intatti. Le unità calcolate dal gestore del rischio vengono convertite
+in lotti arrotondando sempre per difetto, quindi non si rischia mai più del previsto. Se il conto
+collegato è **reale**, il programma si rifiuta di partire senza `--live` e `FOREX_ALLOW_LIVE=yes`.
+
+Gli orari delle candele MT5 sono quelli del server del broker (spesso UTC+2 o UTC+3). Imposta
+`server_utc_offset_hours` perché le candele H4 e il limite di perdita giornaliero siano allineati a UTC.
+
+### Con OANDA (qualsiasi sistema)
 
 ```bash
-export ANTHROPIC_API_KEY=...     # per i ragionatori claude/hybrid
-export OANDA_API_TOKEN=...       # token API OANDA (conto demo: gratuito su oanda.com)
+pip install -e ".[dev]"
+export OANDA_API_TOKEN=...       # token API OANDA (conto demo gratuito su oanda.com)
 export OANDA_ACCOUNT_ID=...      # es. 101-004-1234567-001
 ```
+
+Poi usa `--broker oanda` oppure `broker = "oanda"` nella configurazione.
 
 ## Uso
 
@@ -114,7 +151,7 @@ Su un computer tipico servono circa 15 ms per barra.
 ### 2. Analisi istantanea, con il ragionamento in chiaro
 
 ```bash
-forex-trader analyze --instrument EUR_USD               # dati OANDA demo + ragionatore ibrido
+forex-trader --config config.toml analyze --instrument EUR_USD   # dati dal tuo MT5 + ragionatore ibrido
 forex-trader analyze --synthetic --reasoner rules       # prova offline
 ```
 
@@ -137,11 +174,11 @@ Decisione [hybrid(claude:claude-opus-5-5)]: BUY (confidenza 0.64)
 # Prima: solo ragionamento, nessun ordine (consigliato per qualche settimana)
 forex-trader --config config.toml run --dry-run
 
-# Conto DEMO OANDA con ordini veri (predefinito)
+# Conto DEMO MT5 con ordini veri
 forex-trader --config config.toml run
 
-# Conto REALE: richiede una doppia conferma esplicita
-FOREX_ALLOW_LIVE=yes forex-trader --config config.toml run --live
+# Conto REALE: richiede una doppia conferma esplicita (PowerShell)
+$env:FOREX_ALLOW_LIVE = "yes"; forex-trader --config config.toml run --live
 ```
 
 Il ciclo valuta ogni strumento una volta per candela H1 chiusa. Ogni ordine parte con stop loss e take
@@ -161,11 +198,14 @@ pytest
 ```
 
 I test coprono indicatori, analisi, regole, dimensionamento e limiti di rischio, esecuzione simulata
-(gap, spread, stop e target nella stessa barra), il ragionatore Claude con un client simulato (mappatura,
+(gap, spread, stop e target nella stessa barra), il connettore MetaTrader 5 con un terminale simulato
+(simboli, lotti, ordini, blocco del conto reale, filtro per magic number, storico dei deal), il ragionatore Claude con un client simulato (mappatura,
 limiti, rifiuti, errori di rete), la modalità ibrida, il motore in dry-run e la configurazione.
 
 ## Estendere
 
+- **Esecuzione continua su Windows**: il PC deve restare acceso con MT5 aperto. Per un'operatività
+  24/5 conviene un VPS Windows con il terminale MT5 installato.
 - **Altro broker**: implementa il protocollo `Broker` in `forex_trader/brokers/base.py`.
 - **Altra strategia**: qualsiasi oggetto con `decide(snapshot, context) -> Decision` è un ragionatore.
 - **Più contesto per Claude**: aggiungi campi in `ClaudeReasoner.build_prompt` (calendario macro,
