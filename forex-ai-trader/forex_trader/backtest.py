@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from .brokers.paper import PaperBroker
-from .engine import EngineConfig, TradingEngine
+from .analysis import analyze
+from .engine import Analyzer, EngineConfig, TradingEngine
 from .journal import Journal
 from .models import ClosedTrade
 from .reasoning import Reasoner
@@ -57,11 +58,13 @@ def run_backtest(
     journal: Journal | None = None,
     engine_config: EngineConfig | None = None,
     instruments: list[str] | None = None,
+    analyzer: Analyzer = analyze,
 ) -> BacktestResult:
     broker = PaperBroker(data, initial_balance, account_currency, spread_pips, start_index=warmup_bars)
     risk = RiskManager(risk_config)
     engine = TradingEngine(
-        broker, reasoner, risk, instruments or list(data), journal or Journal(), engine_config or EngineConfig()
+        broker, reasoner, risk, instruments or list(data), journal or Journal(), engine_config or EngineConfig(),
+        analyzer,
     )
     times, values = [], []
     while broker.can_advance():

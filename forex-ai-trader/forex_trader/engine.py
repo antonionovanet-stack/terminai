@@ -6,16 +6,21 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Callable
+
+import pandas as pd
 
 from .analysis import analyze
 from .brokers.base import Broker
 from .fx import round_price, split_instrument
 from .journal import Journal
-from .models import ClosedTrade, OrderPlan, Position
+from .models import ClosedTrade, MarketSnapshot, OrderPlan, Position
 from .reasoning import Reasoner, ReasoningContext
 from .risk import RiskManager
 
 log = logging.getLogger(__name__)
+
+Analyzer = Callable[[pd.DataFrame, str], MarketSnapshot | None]
 
 
 @dataclass(frozen=True)
@@ -34,8 +39,10 @@ class TradingEngine:
         instruments: list[str],
         journal: Journal | None = None,
         config: EngineConfig | None = None,
+        analyzer: Analyzer = analyze,
     ) -> None:
         self.broker = broker
+        self.analyzer = analyzer
         self.reasoner = reasoner
         self.risk = risk
         self.instruments = instruments
@@ -80,7 +87,7 @@ class TradingEngine:
         placed: list[OrderPlan] = []
         for inst in self.instruments:
             candles = self.broker.get_candles(inst, self.cfg.history_bars)
-            snapshot = analyze(candles, inst)
+            snapshot = self.analyzer(candles, inst)
             if snapshot is None:
                 continue
             at = snapshot.time
@@ -118,7 +125,7 @@ class TradingEngine:
             verdict = self.risk.evaluate(decision, snapshot, quote, account, positions, conv)
             if not isinstance(verdict, OrderPlan):
                 self.journal.record("risk_rejected", at=at, instrument=inst, reasons=verdict.reasons)
-                log.info("%s %s rifiutato dal rischio: %s", inst, decision.action, "; ".join(verdict.reasons))
+                log.debug("%s %s rifiutato dal rischio: %s", inst, decision.action, "; ".join(verdict.reasons))
                 continue
 
             if self.cfg.dry_run:

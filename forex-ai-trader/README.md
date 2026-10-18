@@ -184,6 +184,61 @@ $env:FOREX_ALLOW_LIVE = "yes"; forex-trader --config config.toml run --live
 Il ciclo valuta ogni strumento una volta per candela H1 chiusa. Ogni ordine parte con stop loss e take
 profit già agganciati lato broker, così le posizioni restano protette anche se il programma si ferma.
 
+## Auto-evoluzione delle strategie
+
+Il bot migliora da solo le sue regole di ingresso a mercato. Ogni strategia è descritta da un "DNA" di
+26 parametri: pesi e soglie di trend, pullback, momentum, RSI, ritorno alla media, stop e target
+(l'elenco con i limiti è `GENOME` in `forex_trader/evolution.py`).
+
+Una sessione di evoluzione:
+
+1. **Parte dal campione attuale** e crea una popolazione di varianti: mutazioni, incroci tra le migliori,
+   individui casuali per esplorare e, se abiliti `llm_proposals`, **proposte di Claude**. Claude legge i
+   risultati per periodo, fa una diagnosi (es. "troppi falsi segnali in laterale") e propone varianti
+   guidate da ipotesi esplicite.
+2. **Valuta ogni candidato** con un backtest walk-forward su più periodi consecutivi e su tutti gli
+   strumenti. Il punteggio misura la *robustezza statistica* del vantaggio (t-statistic dei rendimenti per
+   trade, media tra periodi meno la dispersione), con penalità per drawdown oltre il 10% e per pochi trade.
+   Premia la costanza, non il colpo di fortuna.
+3. **Seleziona e ripete** per più generazioni (selezione a torneo ed élite).
+4. **Verifica sui dati mai visti.** L'ultimo 30% dello storico non viene mai usato durante la ricerca. Il
+   migliore candidato diventa il nuovo campione solo se, su quei dati, insieme:
+   - ha un vantaggio statistico positivo ed è migliore del campione di almeno `promote_margin`;
+   - è in guadagno;
+   - ha almeno `min_holdout_trades` trade;
+   - ha un drawdown entro `max_holdout_drawdown_pct`.
+
+   Altrimenti resta il campione attuale.
+
+Ogni sessione, candidato, ipotesi di Claude e promozione resta nel registro `strategies/registry.json`.
+
+**Cosa l'evoluzione non può toccare:** i limiti di rischio (`[risk]`): rischio per trade, leva, stop di
+giornata, kill switch. Cambia *quando e come* si entra, mai *quanto* si rischia.
+
+```bash
+# Evoluzione manuale su dati storici (uno o più strumenti)
+forex-trader evolve --csv EUR_USD=dati/eurusd_h1.csv --csv GBP_USD=dati/gbpusd_h1.csv
+
+# Storico scaricato dal tuo MetaTrader 5, con 5 proposte ragionate di Claude
+forex-trader --config config.toml evolve --claude 5
+
+# Solo valutazione, senza cambiare il campione
+forex-trader evolve --csv EUR_USD=dati/eurusd_h1.csv --no-promote
+
+# Campione, genealogia, ipotesi e promozioni
+forex-trader strategies --show
+```
+
+**In automatico:** con `run` e `auto = true`, il bot esegue l'evoluzione una volta a settimana nel
+weekend, a mercato chiuso. Usa lo storico più recente del tuo broker e, se nasce un campione migliore,
+lo adotta subito, senza riavvio. `backtest`, `analyze` e `run` usano sempre il campione del registro; con
+`--default-strategy` usano invece i parametri della configurazione.
+
+> **Limiti onesti.** Ottimizzare sul passato rischia sempre di "imparare il rumore" (overfitting). I
+> controlli qui sopra riducono molto il rischio, ma non lo eliminano: un mercato che cambia regime può
+> rendere obsoleta anche una strategia che ha superato la verifica. Per questo i limiti di rischio
+> restano fissi e vale sempre la regola: prima demo, poi denaro reale.
+
 ## Il diario delle decisioni
 
 `journal/decisions.jsonl` contiene una riga JSON per ogni evento: `decision` (con tesi, fattori, rischi e
@@ -197,7 +252,8 @@ che può così tenere conto di cosa ha funzionato e cosa no.
 pytest
 ```
 
-I test coprono indicatori, analisi, regole, dimensionamento e limiti di rischio, esecuzione simulata
+I test coprono l'evoluzione (operatori genetici entro i limiti, backtest con cache identico a quello
+normale, promozione e registro, pianificazione settimanale, proposte di Claude), indicatori, analisi, regole, dimensionamento e limiti di rischio, esecuzione simulata
 (gap, spread, stop e target nella stessa barra), il connettore MetaTrader 5 con un terminale simulato
 (simboli, lotti, ordini, blocco del conto reale, filtro per magic number, storico dei deal), il ragionatore Claude con un client simulato (mappatura,
 limiti, rifiuti, errori di rete), la modalità ibrida, il motore in dry-run e la configurazione.

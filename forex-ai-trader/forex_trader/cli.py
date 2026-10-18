@@ -1,4 +1,4 @@
-"""Riga di comando: backtest, analisi singola e trading continuo."""
+"""Riga di comando: backtest, analisi singola, evoluzione delle strategie e trading continuo."""
 
 from __future__ import annotations
 
@@ -11,12 +11,14 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 
 from .analysis import analyze
+from .autoevolve import maybe_evolve, resolve_rules, run_evolution
 from .backtest import run_backtest
 from .brokers.mt5 import MT5Error
 from .brokers.oanda import OandaError
 from .config import AppConfig, load_config
 from .data import load_csv, synthetic_candles
 from .engine import TradingEngine
+from .evolution import GENOME, StrategyRegistry, params_to_dict
 from .fx import round_price
 from .journal import Journal
 from .llm_reasoner import ClaudeReasoner, HybridReasoner
@@ -136,6 +138,15 @@ def cmd_run(args: argparse.Namespace, cfg: AppConfig) -> int:
     last_hour = None
     while True:
         now = datetime.now(timezone.utc)
+        try:
+            evolved = maybe_evolve(broker, cfg, instruments, now)
+        except Exception:  # noqa: BLE001 - un'evoluzione fallita non deve fermare il trading
+            log.exception("Evoluzione fallita: continuo con la strategia attuale")
+            evolved = None
+        if evolved is not None:
+            cfg.rules = evolved
+            engine.reasoner = build_reasoner(cfg, args.reasoner)
+            log.info("Nuova strategia campione in uso da ora")
         # Si ragiona una volta per candela H1 chiusa, con qualche secondo di margine per la chiusura.
         if now.hour != last_hour and (now.minute > 0 or now.second >= 5):
             try:
@@ -148,10 +159,103 @@ def cmd_run(args: argparse.Namespace, cfg: AppConfig) -> int:
         time.sleep(min(cfg.poll_seconds, 30))
 
 
+def _evolution_data(args: argparse.Namespace, cfg: AppConfig) -> dict:
+    if args.csv:
+        data = {}
+        for item in args.csv:
+            inst, sep, path = item.partition("=")
+            if not sep:
+                raise SystemExit(f"Formato --csv atteso STRUMENTO=percorso, ricevuto {item!r}")
+            data[inst.upper()] = load_csv(path)
+        return data
+    instruments = args.instruments or cfg.instruments
+    if args.synthetic:
+        starts = {"JPY": 150.0}
+        return {
+            inst: synthetic_candles(bars=args.bars, seed=(args.seed or 7) + i,
+                                    start_price=starts.get(inst[-3:], 1.10))
+            for i, inst in enumerate(instruments)
+        }
+    from .autoevolve import collect_history
+
+    return collect_history(_live_broker(args, cfg), instruments, cfg.evolution.history_bars)
+
+
+def _fmt_eval(label: str, ev) -> str:
+    return (f"  {label:22s} fitness {ev.fitness:+.3f} | {ev.trades:4d} trade | "
+            f"rendimento medio {ev.return_pct:+6.2f}% | drawdown max {ev.max_drawdown_pct:5.2f}%")
+
+
+def cmd_evolve(args: argparse.Namespace, cfg: AppConfig) -> int:
+    search = cfg.evolution.search
+    overrides = {k: v for k, v in {
+        "generations": args.generations, "population": args.population, "seed": args.seed,
+        "llm_proposals": args.claude, "workers": args.workers,
+    }.items() if v is not None}
+    cfg.evolution.search = replace(search, **overrides)
+    if args.registry:
+        cfg.evolution.registry_path = args.registry
+    before = StrategyRegistry(cfg.evolution.registry_path).champion_params(default=cfg.rules)
+    data = _evolution_data(args, cfg)
+    if not data:
+        print("Nessun dato disponibile per l'evoluzione.")
+        return 1
+    for inst, df in data.items():
+        print(f"{inst}: {len(df)} barre H1 ({df.index[0]:%Y-%m-%d} -> {df.index[-1]:%Y-%m-%d})")
+    report = run_evolution(cfg, data, allow_promotion=not args.no_promote)
+
+    print("\nAddestramento (walk-forward):")
+    print(_fmt_eval(f"campione {report.champion_id}", report.champion_train))
+    print(_fmt_eval(f"candidato {report.candidate_id}", report.candidate_train))
+    print("Verifica su dati mai visti:")
+    print(_fmt_eval(f"campione {report.champion_id}", report.champion_holdout))
+    print(_fmt_eval(f"candidato {report.candidate_id}", report.candidate_holdout))
+    verdict = "PROMOSSO a nuovo campione" if report.promoted else "NON promosso"
+    print(f"\nEsito: {verdict}: {report.reason}")
+    if report.candidate_id != report.champion_id:
+        base = params_to_dict(before)
+        changes = {k: v for k, v in params_to_dict(report.candidate_params).items() if base.get(k) != v}
+        print("Modifiche del candidato rispetto alla strategia di partenza:")
+        for k, v in changes.items():
+            print(f"  {k:22s} {base.get(k)} -> {v}")
+    return 0
+
+
+def cmd_strategies(args: argparse.Namespace, cfg: AppConfig) -> int:
+    registry = StrategyRegistry(args.registry or cfg.evolution.registry_path)
+    data = registry.data
+    if not data["strategies"]:
+        print("Registro vuoto: esegui prima `forex-trader evolve`.")
+        return 0
+    print(f"Campione attuale: {registry.champion_id}\n")
+    for sid, s in data["strategies"].items():
+        last = s["evaluations"][-1]
+        mark = "*" if sid == registry.champion_id else " "
+        ho = last.get("holdout", {})
+        print(f"{mark} {sid}  origine {s['origin']:9s} genitore {s['parent'] or '-':10s} "
+              f"holdout fitness {ho.get('fitness', 0):+.3f} trade {ho.get('trades', 0)} "
+              f"rendimento {ho.get('return_pct', 0):+.2f}%")
+        if s.get("rationale"):
+            print(f"      ipotesi: {s['rationale']}")
+    if data["promotions"]:
+        print("\nPromozioni:")
+        for pr in data["promotions"]:
+            print(f"  {pr['at'][:16]}  {pr['from'] or '-'} -> {pr['to']}: {pr['reason']}")
+    if args.show:
+        params = registry.champion_params()
+        print("\nParametri del campione:")
+        desc = {g.name: g.description for g in GENOME}
+        for k, v in params_to_dict(params).items():
+            print(f"  {k:22s} {v!s:8s} {desc.get(k, '')}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="forex-trader", description="Trading Forex automatico con ragionamento sui trend")
     p.add_argument("--config", help="file TOML di configurazione")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--default-strategy", action="store_true",
+                   help="ignora il campione evoluto e usa i parametri della configurazione")
     sub = p.add_subparsers(dest="command", required=True)
 
     reasoner_choices = ["rules", "claude", "hybrid"]
@@ -184,6 +288,26 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--dry-run", action="store_true", help="ragiona e registra, senza inviare ordini")
     r.add_argument("--live", action="store_true", help="conto reale (richiede FOREX_ALLOW_LIVE=yes)")
     r.add_argument("--once", action="store_true", help="esegue un solo ciclo e termina")
+
+    e = sub.add_parser("evolve", help="fa evolvere le strategie di ingresso e promuove la migliore")
+    e.add_argument("--csv", action="append", metavar="STRUMENTO=FILE",
+                   help="dati storici H1 (ripetibile), es. EUR_USD=dati/eurusd.csv")
+    e.add_argument("--synthetic", action="store_true", help="usa dati sintetici (solo per prova)")
+    e.add_argument("--bars", type=int, default=5000, help="barre sintetiche per strumento")
+    e.add_argument("--broker", choices=["mt5", "oanda"], help="scarica lo storico dal broker (default)")
+    e.add_argument("--live", action="store_true", help="consente un conto reale per leggere lo storico")
+    e.add_argument("--instruments", nargs="*")
+    e.add_argument("--generations", type=int)
+    e.add_argument("--population", type=int)
+    e.add_argument("--workers", type=int, help="processi paralleli")
+    e.add_argument("--claude", type=int, metavar="N", help="chiedi a Claude N varianti ragionate (2 volte)")
+    e.add_argument("--seed", type=int)
+    e.add_argument("--registry", help="file del registro strategie")
+    e.add_argument("--no-promote", action="store_true", help="valuta senza cambiare il campione")
+
+    st = sub.add_parser("strategies", help="mostra campione, genealogia e promozioni")
+    st.add_argument("--registry")
+    st.add_argument("--show", action="store_true", help="mostra tutti i parametri del campione")
     return p
 
 
@@ -194,7 +318,12 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     cfg = load_config(args.config)
-    handlers = {"backtest": cmd_backtest, "analyze": cmd_analyze, "run": cmd_run}
+    if args.default_strategy:
+        cfg.evolution.use_champion = False
+    if args.command in ("backtest", "analyze", "run"):
+        cfg.rules = resolve_rules(cfg)
+    handlers = {"backtest": cmd_backtest, "analyze": cmd_analyze, "run": cmd_run,
+                "evolve": cmd_evolve, "strategies": cmd_strategies}
     try:
         return handlers[args.command](args, cfg)
     except (MT5Error, OandaError) as exc:

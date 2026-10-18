@@ -46,3 +46,22 @@ server_utc_offset_hours = 0  # molti broker usano UTC+2/+3: imposta l'offset per
 # Se i nomi non seguono lo schema BASEQUOTE+suffisso:
 # [mt5.symbol_map]
 # EUR_USD = "EURUSDpro"
+
+[evolution]
+auto = true                # durante `run` evolve da solo nel weekend, a mercato chiuso
+every_days = 7
+use_champion = true        # opera con la strategia campione evoluta (se esiste)
+registry_path = "strategies/registry.json"
+cache_dir = ".cache"
+history_bars = 5000        # storico H1 per strumento usato dall'evoluzione (~10 mesi)
+
+[evolution.search]
+population = 20            # candidati per generazione
+generations = 10
+folds = 3                  # periodi walk-forward in addestramento
+holdout_fraction = 0.3     # ultimo 30% dello storico: dati MAI visti, usati solo per decidere la promozione
+min_holdout_trades = 10
+promote_margin = 0.25      # quanto deve essere migliore del campione sui dati mai visti
+max_holdout_drawdown_pct = 15.0
+llm_proposals = 0          # >0: Claude analizza i risultati e propone N varianti ragionate (2 volte per sessione)
+workers = 0                # processi paralleli, 0 = automatico

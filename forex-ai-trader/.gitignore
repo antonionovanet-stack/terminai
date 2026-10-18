@@ -4,3 +4,5 @@ __pycache__/
 journal/
 config.toml
 .env
+.cache/
+strategies/
