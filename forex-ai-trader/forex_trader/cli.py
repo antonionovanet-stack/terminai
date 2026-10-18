@@ -21,7 +21,7 @@ from .engine import TradingEngine
 from .evolution import GENOME, StrategyRegistry, params_to_dict
 from .fx import round_price
 from .journal import Journal
-from .llm_reasoner import ClaudeReasoner, HybridReasoner
+from .llm_reasoner import ClaudeReasoner, HybridReasoner, claude_credentials_available
 from .reasoning import Reasoner, ReasoningContext
 from .risk import RiskManager
 from .strategy import RuleBasedReasoner
@@ -37,6 +37,9 @@ Prova sempre a lungo in backtest e su conto demo prima di usare denaro reale."""
 def build_reasoner(cfg: AppConfig, kind: str | None = None) -> Reasoner:
     kind = kind or cfg.reasoner.kind
     rules = RuleBasedReasoner(cfg.rules)
+    if kind != "rules" and not claude_credentials_available():
+        log.warning("Nessuna credenziale Claude (ANTHROPIC_API_KEY): uso solo il ragionatore a regole")
+        kind = "rules"
     if kind == "rules":
         return rules
     llm = ClaudeReasoner(cfg.claude, fallback=rules)

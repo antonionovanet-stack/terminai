@@ -10,6 +10,7 @@ import pandas as pd
 from .brokers.base import Broker
 from .config import AppConfig
 from .evolution import EvolutionReport, StrategyRegistry, evolve
+from .llm_reasoner import claude_credentials_available
 from .strategy import RuleParams
 from .strategy_proposer import ClaudeStrategyProposer
 
@@ -54,7 +55,12 @@ def run_evolution(
     cfg: AppConfig, data: dict[str, pd.DataFrame], allow_promotion: bool = True, disk_cache: bool = True
 ) -> EvolutionReport:
     evo = cfg.evolution
-    proposer = ClaudeStrategyProposer(cfg.claude) if evo.search.llm_proposals > 0 else None
+    proposer = None
+    if evo.search.llm_proposals > 0:
+        if claude_credentials_available():
+            proposer = ClaudeStrategyProposer(cfg.claude)
+        else:
+            log.warning("Nessuna credenziale Claude: evoluzione senza proposte ragionate")
     return evolve(
         data, StrategyRegistry(evo.registry_path), evo.search, cfg.risk, cfg.engine,
         proposer=proposer, cache_dir=evo.cache_dir if disk_cache else None, allow_promotion=allow_promotion, base=cfg.rules,

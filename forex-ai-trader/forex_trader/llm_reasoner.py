@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Literal
 
 import anthropic
@@ -21,6 +23,13 @@ from .strategy import RuleBasedReasoner
 log = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-opus-5-5"
+
+
+def claude_credentials_available() -> bool:
+    if any(os.environ.get(v) for v in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE")):
+        return True
+    # Profilo salvato da `ant auth login`.
+    return (Path.home() / ".config" / "anthropic").is_dir()
 
 SYSTEM_PROMPT = """\
 Sei un analista e trader Forex disciplinato. Il tuo compito è leggere i dati di mercato che ricevi, \

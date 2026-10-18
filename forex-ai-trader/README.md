@@ -74,6 +74,28 @@ lo annota nel diario (`source: "rules(fallback: ...)"`).
 - **Stop di giornata** (predefinito -3%): blocca nuovi ingressi fino al giorno dopo.
 - **Kill switch** sul drawdown dal picco (predefinito -15%): blocca il trading fino al riavvio manuale.
 
+## Avvio rapido su Windows
+
+1. Apri MetaTrader 5, accedi al conto **demo** e attiva il pulsante **Algo Trading**.
+2. Scarica questa cartella sul PC e fai doppio clic su **`avvia.bat`**.
+
+Al primo avvio lo script:
+- crea l'ambiente Python e installa tutto;
+- crea `config.toml`;
+- chiede (facoltativa) la chiave API di Claude;
+- verifica la connessione a MT5 con un'analisi di EUR/USD;
+- parte in **modalità simulata**: ragiona e registra nel diario, senza inviare ordini.
+
+Quando sei pronto, da PowerShell nella cartella:
+
+```powershell
+.\avvia.ps1 -Ordini     # ordini veri sul conto collegato (il conto reale resta bloccato senza doppia conferma)
+.\avvia.ps1 -Evolvi     # prima una sessione di evoluzione delle strategie
+.\avvia.ps1 -Analisi    # solo l'analisi immediata
+```
+
+Senza chiave API il bot funziona lo stesso, con il solo ragionatore a regole.
+
 ## Installazione
 
 Serve Python 3.11 o successivo.
